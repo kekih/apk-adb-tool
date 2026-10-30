@@ -1,34 +1,36 @@
 # apk-adb-tool
 
-Красивая тёмная GUI-утилита на Rust (egui): ищет установленные приложения на Android-телефоне по названию через ADB, показывает список, скачивает APK и переустанавливает.
-
-![Dark theme GUI](https://img.shields.io/badge/theme-dark-111118)
+Тёмная GUI-утилита на Rust (egui): ищет установленные приложения на Android через ADB, скачивает APK и переустанавливает.
 
 ## Возможности
 
-- Тёмная тема, современный интерфейс
-- Поиск пакетов по части имени (регистронезависимый)
-- Фильтр только сторонних приложений (`-3`)
-- Выбор устройства (если подключено несколько)
-- Скачивание APK (`adb pull`)
-- Переустановка (`adb install -r`)
-- Двойной клик по пакету = сразу скачать
-- Лог действий внизу
-- Выбор папки для сохранения APK
+- Тёмная тема
+- Поиск пакетов по части имени
+- Фильтр сторонних приложений
+- Выбор устройства
+- Download APK / Install
+- Двойной клик = сразу скачать
+- Лог действий
+
+## Скачать бинарник
+
+После каждого push в `main` GitHub Actions сам собирает:
+
+**Actions → последний Build → Artifacts**
+
+Там будут:
+- `apk-adb-tool.exe` (Windows)
+- `apk-adb-tool-linux`
+- `apk-adb-tool-macos`
+
+При создании тега `v*` дополнительно появляется [Release](https://github.com/kekih/apk-adb-tool/releases).
 
 ## Требования
 
-- [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools) (`adb` в PATH)
-- Телефон с USB-отладкой
-- Для сборки: Rust 1.75+
+- [Platform Tools](https://developer.android.com/tools/releases/platform-tools) (`adb` в PATH)
+- USB-отладка на телефоне
 
-## Скачать готовый `.exe`
-
-Смотри [Releases](https://github.com/kekih/apk-adb-tool/releases) — Windows `.exe`, Linux и macOS бинарники собираются через GitHub Actions.
-
-Или запусти workflow вручную: **Actions → Release → Run workflow**.
-
-## Сборка
+## Сборка локально
 
 ```bash
 git clone https://github.com/kekih/apk-adb-tool.git
@@ -36,20 +38,17 @@ cd apk-adb-tool
 cargo run --release
 ```
 
+На Linux может понадобиться:
+```bash
+sudo apt install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libgtk-3-dev
+```
+
 ## Использование
 
-1. Подключи телефон, разреши отладку.
-2. Введи часть имени пакета (например `telegram`, `youtube`).
-3. Нажми **Search** или Enter.
-4. Выбери приложение в списке.
-5. **Download APK** — сохранит файл.
-6. **Install / Reinstall** — поставит обратно на телефон.
-
-## Примечания
-
-- Ищет только уже установленные приложения (не в интернете).
-- Системные APK иногда требуют root для pull.
-- Рекомендуется включать «Only third-party apps».
+1. Подключи телефон
+2. Введи часть package name (`telegram`, `youtube`…)
+3. Search → выбери пакет
+4. **Download APK** → **Install / Reinstall**
 
 ## Лицензия
 

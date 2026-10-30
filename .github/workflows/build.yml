@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: apk-adb-tool.exe
+            bin_name: apk-adb-tool.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: apk-adb-tool-linux
+            bin_name: apk-adb-tool
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: apk-adb-tool-macos
+            bin_name: apk-adb-tool
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          SRC="target/${{ matrix.target }}/release/${{ matrix.bin_name }}"
+          cp "$SRC" "${{ matrix.artifact }}"
+          if [[ "${{ matrix.os }}" != "windows-latest" ]]; then
+            chmod +x "${{ matrix.artifact }}"
+          fi
+          ls -la "${{ matrix.artifact }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Collect files
+        run: |
+          mkdir -p dist
+          find . -name 'apk-adb-tool*' -type f -exec cp {} dist/ \;
+          ls -la dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

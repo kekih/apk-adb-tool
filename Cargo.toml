@@ -1,8 +1,8 @@
 [package]
 name = "apk-adb-tool"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
-description = "Beautiful dark-themed GUI to search installed Android apps via ADB, pull APK and reinstall"
+description = "Dark-themed GUI to search installed Android apps via ADB, pull APK and reinstall"
 authors = ["kekih"]
 license = "MIT"
 repository = "https://github.com/kekih/apk-adb-tool"
@@ -10,8 +10,6 @@ repository = "https://github.com/kekih/apk-adb-tool"
 [dependencies]
 eframe = { version = "0.29", default-features = true, features = ["default_fonts", "glow"] }
 egui = "0.29"
-egui_extras = { version = "0.29", features = ["all_loaders"] }
-anyhow = "1"
 which = "6"
 rfd = "0.15"
 open = "5"
