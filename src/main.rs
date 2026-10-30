@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, RichText, ScrollArea, Sense, Vec2};
+use eframe::egui::{self, Color32, RichText, ScrollArea, Vec2};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -17,7 +17,6 @@ fn main() -> eframe::Result<()> {
         "APK ADB Tool",
         options,
         Box::new(|cc| {
-            // Force dark theme
             let mut visuals = egui::Visuals::dark();
             visuals.window_fill = Color32::from_rgb(18, 18, 22);
             visuals.panel_fill = Color32::from_rgb(24, 24, 30);
@@ -30,7 +29,6 @@ fn main() -> eframe::Result<()> {
             visuals.override_text_color = Some(Color32::from_rgb(220, 220, 230));
             cc.egui_ctx.set_visuals(visuals);
 
-            // Slightly larger fonts
             let mut style = (*cc.egui_ctx.style()).clone();
             style.text_styles.insert(
                 egui::TextStyle::Body,
@@ -60,28 +58,19 @@ enum WorkerMsg {
 }
 
 struct App {
-    // ADB / device
     adb_ok: Option<bool>,
     devices: Vec<String>,
     selected_device: Option<usize>,
-
-    // Search
     search: String,
     third_party_only: bool,
     packages: Vec<String>,
     selected_pkg: Option<usize>,
     searching: bool,
-
-    // Actions
     output_dir: PathBuf,
     pulling: bool,
     installing: bool,
     last_pulled: Option<PathBuf>,
-
-    // Log
     log: Vec<(String, Color32)>,
-
-    // Channel
     tx: Sender<WorkerMsg>,
     rx: Receiver<WorkerMsg>,
 }
@@ -127,24 +116,21 @@ impl App {
         let tx = self.tx.clone();
         thread::spawn(move || {
             match which::which("adb") {
-                Ok(_) => {
-                    let out = run_adb(None, &["devices"]);
-                    match out {
-                        Ok(text) => {
-                            let list: Vec<String> = text
-                                .lines()
-                                .skip(1)
-                                .filter(|l| l.contains("\tdevice"))
-                                .map(|l| l.split('\t').next().unwrap_or("").to_string())
-                                .filter(|s| !s.is_empty())
-                                .collect();
-                            let _ = tx.send(WorkerMsg::Devices(Ok(list)));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(WorkerMsg::Devices(Err(e)));
-                        }
+                Ok(_) => match run_adb(None, &["devices"]) {
+                    Ok(text) => {
+                        let list: Vec<String> = text
+                            .lines()
+                            .skip(1)
+                            .filter(|l| l.contains("\tdevice"))
+                            .map(|l| l.split('\t').next().unwrap_or("").to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        let _ = tx.send(WorkerMsg::Devices(Ok(list)));
                     }
-                }
+                    Err(e) => {
+                        let _ = tx.send(WorkerMsg::Devices(Err(e)));
+                    }
+                },
                 Err(_) => {
                     let _ = tx.send(WorkerMsg::Devices(Err(
                         "ADB not found in PATH. Install Platform Tools.".into(),
@@ -166,7 +152,10 @@ impl App {
         self.searching = true;
         self.packages.clear();
         self.selected_pkg = None;
-        self.log(format!("Searching for \"{}\"…", self.search.trim()), Color32::LIGHT_BLUE);
+        self.log(
+            format!("Searching for \"{}\"…", self.search.trim()),
+            Color32::LIGHT_BLUE,
+        );
 
         let search = self.search.trim().to_lowercase();
         let third = self.third_party_only;
@@ -220,7 +209,6 @@ impl App {
         let tx = self.tx.clone();
 
         thread::spawn(move || {
-            // Get path
             let path_res = run_adb(serial.as_deref(), &["shell", "pm", "path", &package]);
             let apk_on_device = match path_res {
                 Ok(text) => text
@@ -241,8 +229,7 @@ impl App {
             let safe = package.replace('.', "_");
             let local = out_dir.join(format!("{}.apk", safe));
 
-            let status = run_adb_status(serial.as_deref(), &["pull", &apk_path, local.to_str().unwrap()]);
-            match status {
+            match run_adb_status(serial.as_deref(), &["pull", &apk_path, local.to_str().unwrap()]) {
                 Ok(s) if s.success() => {
                     let _ = tx.send(WorkerMsg::PullDone(Ok(local)));
                 }
@@ -264,7 +251,10 @@ impl App {
             return;
         };
         if !path.exists() {
-            self.log("Pulled file no longer exists".into(), Color32::from_rgb(255, 100, 100));
+            self.log(
+                "Pulled file no longer exists".into(),
+                Color32::from_rgb(255, 100, 100),
+            );
             return;
         }
         self.installing = true;
@@ -274,24 +264,17 @@ impl App {
         let tx = self.tx.clone();
 
         thread::spawn(move || {
-            // try with -r -t first
             let st = run_adb_status(
                 serial.as_deref(),
                 &["install", "-r", "-t", path.to_str().unwrap()],
             );
-            match st {
-                Ok(s) if s.success() => {
+            if let Ok(s) = st {
+                if s.success() {
                     let _ = tx.send(WorkerMsg::InstallDone(Ok(())));
                     return;
                 }
-                _ => {}
             }
-            // retry without -t
-            let st2 = run_adb_status(
-                serial.as_deref(),
-                &["install", "-r", path.to_str().unwrap()],
-            );
-            match st2 {
+            match run_adb_status(serial.as_deref(), &["install", "-r", path.to_str().unwrap()]) {
                 Ok(s) if s.success() => {
                     let _ = tx.send(WorkerMsg::InstallDone(Ok(())));
                 }
@@ -353,7 +336,10 @@ impl App {
                 }
                 WorkerMsg::InstallDone(Ok(())) => {
                     self.installing = false;
-                    self.log("Installed successfully!".into(), Color32::from_rgb(100, 220, 140));
+                    self.log(
+                        "Installed successfully!".into(),
+                        Color32::from_rgb(100, 220, 140),
+                    );
                 }
                 WorkerMsg::InstallDone(Err(e)) => {
                     self.installing = false;
@@ -369,12 +355,10 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_messages();
 
-        // Keep UI responsive while workers run
         if self.searching || self.pulling || self.installing {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
-        // ── Top bar ──────────────────────────────────────────────
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -393,7 +377,6 @@ impl eframe::App for App {
             ui.add_space(4.0);
         });
 
-        // ── Bottom log ───────────────────────────────────────────
         egui::TopBottomPanel::bottom("log")
             .resizable(true)
             .default_height(140.0)
@@ -417,7 +400,6 @@ impl eframe::App for App {
                     });
             });
 
-        // ── Left panel: search + list ─────────────────────────────
         egui::SidePanel::left("left")
             .resizable(true)
             .default_width(380.0)
@@ -425,8 +407,12 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(10.0);
 
-                // Device
-                ui.label(RichText::new("Device").strong().size(13.0).color(Color32::from_rgb(160, 160, 180)));
+                ui.label(
+                    RichText::new("Device")
+                        .strong()
+                        .size(13.0)
+                        .color(Color32::from_rgb(160, 160, 180)),
+                );
                 ui.add_space(4.0);
                 if self.devices.is_empty() {
                     ui.label(RichText::new("No device").color(Color32::from_rgb(255, 140, 100)));
@@ -448,8 +434,12 @@ impl eframe::App for App {
 
                 ui.add_space(12.0);
 
-                // Search
-                ui.label(RichText::new("Search").strong().size(13.0).color(Color32::from_rgb(160, 160, 180)));
+                ui.label(
+                    RichText::new("Search")
+                        .strong()
+                        .size(13.0)
+                        .color(Color32::from_rgb(160, 160, 180)),
+                );
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let resp = ui.add(
@@ -477,18 +467,14 @@ impl eframe::App for App {
                 ui.separator();
                 ui.add_space(6.0);
 
-                // Results header
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("Packages ({})", self.packages.len()))
-                            .strong()
-                            .size(13.0)
-                            .color(Color32::from_rgb(160, 160, 180)),
-                    );
-                });
+                ui.label(
+                    RichText::new(format!("Packages ({})", self.packages.len()))
+                        .strong()
+                        .size(13.0)
+                        .color(Color32::from_rgb(160, 160, 180)),
+                );
                 ui.add_space(4.0);
 
-                // Package list
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -513,7 +499,6 @@ impl eframe::App for App {
                     });
             });
 
-        // ── Central panel: actions ────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(16.0);
             ui.vertical_centered(|ui| {
@@ -546,7 +531,6 @@ impl eframe::App for App {
             ui.separator();
             ui.add_space(16.0);
 
-            // Output dir
             ui.horizontal(|ui| {
                 ui.label("Save APKs to:");
                 ui.label(
@@ -562,7 +546,6 @@ impl eframe::App for App {
 
             ui.add_space(24.0);
 
-            // Big action buttons
             ui.vertical_centered(|ui| {
                 let can_pull = self.selected_pkg.is_some() && !self.pulling && !self.installing;
                 let pull_label = if self.pulling {
@@ -604,9 +587,12 @@ impl eframe::App for App {
 
                 if let Some(ref path) = self.last_pulled {
                     ui.label(
-                        RichText::new(format!("Last file: {}", path.file_name().unwrap_or_default().to_string_lossy()))
-                            .size(13.0)
-                            .color(Color32::from_rgb(140, 200, 140)),
+                        RichText::new(format!(
+                            "Last file: {}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ))
+                        .size(13.0)
+                        .color(Color32::from_rgb(140, 200, 140)),
                     );
                     ui.add_space(6.0);
                     if ui.button("Open folder").clicked() {
@@ -627,8 +613,6 @@ impl eframe::App for App {
         });
     }
 }
-
-// ── ADB helpers ───────────────────────────────────────────────────
 
 fn run_adb(serial: Option<&str>, args: &[&str]) -> Result<String, String> {
     let mut full = Vec::new();
@@ -652,7 +636,10 @@ fn run_adb(serial: Option<&str>, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn run_adb_status(serial: Option<&str>, args: &[&str]) -> Result<std::process::ExitStatus, String> {
+fn run_adb_status(
+    serial: Option<&str>,
+    args: &[&str],
+) -> Result<std::process::ExitStatus, String> {
     let mut full = Vec::new();
     if let Some(s) = serial {
         full.push("-s");
