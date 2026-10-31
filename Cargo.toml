@@ -1,6 +1,6 @@
 [package]
 name = "apk-adb-tool"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Dark-themed GUI to search installed Android apps via ADB, pull APK and reinstall"
 authors = ["kekih"]
