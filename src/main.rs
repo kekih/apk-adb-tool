@@ -1,4 +1,5 @@
 use eframe::egui::{self, Color32, RichText, ScrollArea, Vec2};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -51,7 +52,7 @@ fn main() -> eframe::Result<()> {
 
 enum WorkerMsg {
     Devices(Result<Vec<String>, String>),
-    Packages(Result<Vec<String>, String>),
+    Packages(Result<Vec<(String, String)>, String>),
     PullDone(Result<PathBuf, String>),
     InstallDone(Result<(), String>),
     Log(String),
@@ -63,7 +64,7 @@ struct App {
     selected_device: Option<usize>,
     search: String,
     third_party_only: bool,
-    packages: Vec<String>,
+    packages: Vec<(String, String)>,
     selected_pkg: Option<usize>,
     searching: bool,
     output_dir: PathBuf,
@@ -146,7 +147,10 @@ impl App {
             return;
         }
         if self.devices.is_empty() {
-            self.log("No device connected".to_string(), Color32::from_rgb(255, 100, 100));
+            self.log(
+                "No device connected".to_string(),
+                Color32::from_rgb(255, 100, 100),
+            );
             return;
         }
         self.searching = true;
@@ -167,31 +171,72 @@ impl App {
             if third {
                 args.push("-3");
             }
-            match run_adb(serial.as_deref(), &args) {
-                Ok(raw) => {
-                    let mut matches: Vec<String> = raw
-                        .lines()
-                        .filter_map(|line| {
-                            let line = line.trim();
-                            if !line.starts_with("package:") {
-                                return None;
-                            }
-                            let pkg = line.trim_start_matches("package:").trim();
-                            if pkg.to_lowercase().contains(&search) {
-                                Some(pkg.to_string())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    matches.sort();
-                    matches.dedup();
-                    let _ = tx.send(WorkerMsg::Packages(Ok(matches)));
-                }
+            let raw = match run_adb(serial.as_deref(), &args) {
+                Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(WorkerMsg::Packages(Err(e)));
+                    return;
+                }
+            };
+
+            let all_pkgs: Vec<String> = raw
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    if !line.starts_with("package:") {
+                        return None;
+                    }
+                    Some(line.trim_start_matches("package:").trim().to_string())
+                })
+                .collect();
+
+            let mut labels: HashMap<String, String> = HashMap::new();
+            if let Ok(dump) =
+                run_adb(serial.as_deref(), &["shell", "dumpsys", "package", "packages"])
+            {
+                let mut current: Option<String> = None;
+                for line in dump.lines() {
+                    let t = line.trim();
+                    if let Some(rest) = t.strip_prefix("Package [") {
+                        if let Some(end) = rest.find(']') {
+                            current = Some(rest[..end].to_string());
+                        }
+                    }
+                    for key in ["applicationLabel=", "nonLocalizedLabel="] {
+                        if let Some(val) = t.strip_prefix(key) {
+                            if let Some(pkg) = &current {
+                                let label = val.trim().trim_matches('"').to_string();
+                                if !label.is_empty() && label != "null" {
+                                    labels.insert(pkg.clone(), label);
+                                }
+                            }
+                        }
+                    }
                 }
             }
+
+            let mut matches: Vec<(String, String)> = all_pkgs
+                .into_iter()
+                .filter_map(|pkg| {
+                    let label = labels.get(&pkg).cloned().unwrap_or_default();
+                    let pkg_l = pkg.to_lowercase();
+                    let label_l = label.to_lowercase();
+                    if pkg_l.contains(&search) || label_l.contains(&search) {
+                        Some((pkg, label))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            matches.sort_by(|a, b| {
+                let la = if a.1.is_empty() { &a.0 } else { &a.1 };
+                let lb = if b.1.is_empty() { &b.0 } else { &b.1 };
+                la.to_lowercase().cmp(&lb.to_lowercase())
+            });
+            matches.dedup();
+
+            let _ = tx.send(WorkerMsg::Packages(Ok(matches)));
         });
     }
 
@@ -200,7 +245,7 @@ impl App {
             self.log("Select a package first".to_string(), Color32::YELLOW);
             return;
         };
-        let package = self.packages[idx].clone();
+        let package = self.packages[idx].0.clone();
         self.pulling = true;
         self.log(format!("Pulling {}…", package), Color32::LIGHT_BLUE);
 
@@ -222,14 +267,19 @@ impl App {
             };
 
             let Some(apk_path) = apk_on_device else {
-                let _ = tx.send(WorkerMsg::PullDone(Err("Could not resolve APK path".into())));
+                let _ = tx.send(WorkerMsg::PullDone(Err(
+                    "Could not resolve APK path".into(),
+                )));
                 return;
             };
 
             let safe = package.replace('.', "_");
             let local = out_dir.join(format!("{}.apk", safe));
 
-            match run_adb_status(serial.as_deref(), &["pull", &apk_path, local.to_str().unwrap()]) {
+            match run_adb_status(
+                serial.as_deref(),
+                &["pull", &apk_path, local.to_str().unwrap()],
+            ) {
                 Ok(s) if s.success() => {
                     let _ = tx.send(WorkerMsg::PullDone(Ok(local)));
                 }
@@ -268,13 +318,16 @@ impl App {
                 serial.as_deref(),
                 &["install", "-r", "-t", path.to_str().unwrap()],
             );
-            if let Ok(s) = st {
+            if let Ok(s) = &st {
                 if s.success() {
                     let _ = tx.send(WorkerMsg::InstallDone(Ok(())));
                     return;
                 }
             }
-            match run_adb_status(serial.as_deref(), &["install", "-r", path.to_str().unwrap()]) {
+            match run_adb_status(
+                serial.as_deref(),
+                &["install", "-r", path.to_str().unwrap()],
+            ) {
                 Ok(s) if s.success() => {
                     let _ = tx.send(WorkerMsg::InstallDone(Ok(())));
                 }
@@ -312,11 +365,19 @@ impl App {
                 }
                 WorkerMsg::Packages(Ok(list)) => {
                     self.searching = false;
+                    let n = list.len();
                     self.packages = list;
-                    self.log(
-                        format!("Found {} package(s)", self.packages.len()),
-                        Color32::from_rgb(100, 220, 140),
-                    );
+                    if n == 0 {
+                        self.log(
+                            "Nothing found. Uncheck third-party filter or try package id (x8bit, tencent).".to_string(),
+                            Color32::YELLOW,
+                        );
+                    } else {
+                        self.log(
+                            format!("Found {} package(s)", n),
+                            Color32::from_rgb(100, 220, 140),
+                        );
+                    }
                 }
                 WorkerMsg::Packages(Err(e)) => {
                     self.searching = false;
@@ -402,7 +463,7 @@ impl eframe::App for App {
 
         egui::SidePanel::left("left")
             .resizable(true)
-            .default_width(380.0)
+            .default_width(400.0)
             .min_width(280.0)
             .show(ctx, |ui| {
                 ui.add_space(10.0);
@@ -444,7 +505,7 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("package name…")
+                            .hint_text("name or package…")
                             .desired_width(ui.available_width() - 90.0),
                     );
                     if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -488,8 +549,13 @@ impl eframe::App for App {
                         let mut pull_now = false;
                         for i in 0..self.packages.len() {
                             let selected = self.selected_pkg == Some(i);
-                            let label = self.packages[i].clone();
-                            let resp = ui.selectable_label(selected, label);
+                            let (pkg, label) = &self.packages[i];
+                            let text = if label.is_empty() {
+                                pkg.clone()
+                            } else {
+                                format!("{}  ({})", label, pkg)
+                            };
+                            let resp = ui.selectable_label(selected, text);
                             if resp.clicked() {
                                 self.selected_pkg = Some(i);
                             }
@@ -517,11 +583,17 @@ impl eframe::App for App {
                 let pkg_text = self
                     .selected_pkg
                     .and_then(|i| self.packages.get(i))
-                    .map(|s| s.as_str())
-                    .unwrap_or("— none —");
+                    .map(|(pkg, label)| {
+                        if label.is_empty() {
+                            pkg.clone()
+                        } else {
+                            format!("{}\n{}", label, pkg)
+                        }
+                    })
+                    .unwrap_or_else(|| "— none —".to_string());
 
                 ui.label(
-                    RichText::new(pkg_text)
+                    RichText::new(&pkg_text)
                         .size(18.0)
                         .strong()
                         .color(if self.selected_pkg.is_some() {
@@ -571,7 +643,8 @@ impl eframe::App for App {
 
                 ui.add_space(12.0);
 
-                let can_install = self.last_pulled.is_some() && !self.pulling && !self.installing;
+                let can_install =
+                    self.last_pulled.is_some() && !self.pulling && !self.installing;
                 let install_label = if self.installing {
                     "Installing…"
                 } else {
@@ -609,7 +682,7 @@ impl eframe::App for App {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("Double-click a package to download immediately")
+                    RichText::new("Search by app name or package. Double-click to download.")
                         .size(12.0)
                         .italics()
                         .color(Color32::from_rgb(110, 110, 130)),
